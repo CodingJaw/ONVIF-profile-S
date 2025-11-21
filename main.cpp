@@ -313,23 +313,10 @@ void * RTSP_ServiceThread(void *param)
 		printf("client connected:%s(%d)\n",inet_ntoa(addr.sin_addr),ntohs(addr.sin_port));
 		opt = 1;
 		ret = setsockopt(hConnSock,IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
-		if (ret < 0)
-		{
-			printf("set rtsp tcp sockopt error\n");
-			close(hConnSock);
-			continue;
-		}
-		RTSPNewConnect(hConnSock,&addr);
-	}
-	close(hListenSock);
-	pthread_exit(NULL);
-	return NULL;
+int main()
+{
+  return 0;
 }
-
-  g_sys_param.videoEnc[0][0].nFramerate = g_sys_param.videoEnc[0][1].nFramerate = 30;
-  g_sys_param.videoEnc[0][0].nKeyInterval = g_sys_param.videoEnc[0][1].nKeyInterval = 100;
-  g_sys_param.rtsp.nRtspPort = 1554;*/
-  ONVIFStart();
   RTSP_ServiceStart();
   while(1)
   {
