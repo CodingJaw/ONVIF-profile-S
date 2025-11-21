@@ -366,7 +366,7 @@ typedef char HASHHEX[HASHHEXLEN+1];
 
 		int GetLocalMac(unsigned char *vmac, char* ETH_NAME /* = "eth0" */);
 		int GetLocalMac2(unsigned char *vmac, char* ETH_NAME /* = "eth0" */);
-		int GetLocalAddress(char *szIPAddr, char* ETH_NAME /* = "eth0" */,char * def);
+            int GetLocalAddress(char *szIPAddr, char* ETH_NAME /* = ETH_WIRE_DEV */,char * def);
 		int GetLocalMask(unsigned char *vmask, char* ETH_NAME);
 		int GetLocalGateway(unsigned char *vgate,char * ETH_NAME);
 		char* GetLocalHostName(char* hostname, int nMaxSize);
