@@ -1,0 +1,36 @@
+# Build output
+onvif
+*.o
+*.a
+*.so
+*.out
+*.exe
+
+# Object folder
+onvifobj/
+
+# Editor backups
+*~
+*.swp
+*.tmp
+
+# IDE folders
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# GSOAP generated files (if applicable)
+*.wsdl.h
+*.nsmap
+soapStub.h
+soapH.h
+soapC.cpp
+soapClient.cpp
+soapServer.cpp
+soapServerLib.cpp
+soapClientLib.cpp
+
+# Ignore any core dumps
+core
