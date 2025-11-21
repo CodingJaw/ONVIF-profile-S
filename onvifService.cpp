@@ -3,6 +3,11 @@
 #include <memory.h>
 #include <string.h>
 #include <errno.h>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <ctime>
+#include <cctype>
 #ifndef _WIN32
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
@@ -12,6 +17,7 @@
 #include "onvif.h"
 #include "onvifService.h"
 #include "deviceinformation.nsmap"
+#include "uuid.h"
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -45,6 +51,28 @@ const char *http_notallowed="Method Not Allowed";
 extern Onvif_Server g_OnvifServer;
 extern unsigned short g_wOnvifPort;
 unsigned int g_OnvifServiceRunning = 1;
+static pthread_mutex_t g_EventMutex = PTHREAD_MUTEX_INITIALIZER;
+static const int kDefaultTerminationSeconds = 3600;
+static const char *kEventTopicDialect = "http://www.onvif.org/ver10/tev/topicExpression/ConcreteSet";
+
+struct AlarmEvent
+{
+        std::string topic;
+        std::string sourceName;
+        std::string sourceValue;
+        std::string dataName;
+        std::string dataValue;
+        std::string utcTime;
+};
+
+struct PullPointSubscription
+{
+        std::string id;
+        time_t termination;
+        std::vector<AlarmEvent> events;
+};
+
+static std::vector<PullPointSubscription> g_Subscriptions;
 //FIXME remove SYS_PARAM
 //extern SYS_PARAM g_sys_param;
 int GetLocalAddress(char *szIPAddr, char* ETH_NAME /* = ETH_WIRE_DEV */, char * def)
@@ -110,7 +138,79 @@ void ONVIF_GETMAC(unsigned char * macaddr, char * eth_device)
 		memcpy(macaddr,sa.sa_data,6);
 		//	sprintf((char*)vmac,"%0.2X:%0.2X:%0.2X:%0.2X:%0.2X:%0.2X\n",mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 		//sprintf((char*)vmac,"%02X:%02X:%02X:%02X:%02X:%02X",mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-		close(sock);
+        close(sock);
+}
+
+static void GenerateUUIDString(std::string &out)
+{
+        uuid_t id;
+        char uuidbuf[64];
+        uuid_generate(id);
+        uuid_unparse(id, uuidbuf);
+        for(size_t i = 0; i < strlen(uuidbuf); ++i)
+                uuidbuf[i] = tolower(uuidbuf[i]);
+        out = uuidbuf;
+}
+
+static void FormatUtcTime(time_t t, char *buffer, size_t len)
+{
+        struct tm gm;
+        gmtime_r(&t, &gm);
+        strftime(buffer, len, "%Y-%m-%dT%H:%M:%SZ", &gm);
+}
+
+static void EnqueueBaselineEvents(PullPointSubscription &sub)
+{
+        char timebuf[64];
+        FormatUtcTime(time(NULL), timebuf, sizeof(timebuf));
+
+        AlarmEvent digitalInput;
+        digitalInput.topic = "tns1:Device/IO/Input/LogicalState";
+        digitalInput.sourceName = "InputToken";
+        digitalInput.sourceValue = "Input1";
+        digitalInput.dataName = "State";
+        digitalInput.dataValue = "false";
+        digitalInput.utcTime = timebuf;
+        sub.events.push_back(digitalInput);
+
+        AlarmEvent relay;
+        relay.topic = "tns1:Device/IO/Relay/LogicalState";
+        relay.sourceName = "RelayToken";
+        relay.sourceValue = "Relay1";
+        relay.dataName = "State";
+        relay.dataValue = "false";
+        relay.utcTime = timebuf;
+        sub.events.push_back(relay);
+
+        AlarmEvent motion;
+        motion.topic = "tns1:VideoSource/MotionAlarm";
+        motion.sourceName = "VideoSource";
+        motion.sourceValue = "Camera1";
+        motion.dataName = "IsMotion";
+        motion.dataValue = "false";
+        motion.utcTime = timebuf;
+        sub.events.push_back(motion);
+}
+
+static PullPointSubscription *FindSubscription(const std::string &id)
+{
+        for(size_t i = 0; i < g_Subscriptions.size(); ++i)
+        {
+                if(g_Subscriptions[i].id == id)
+                        return &g_Subscriptions[i];
+        }
+        return NULL;
+}
+
+static PullPointSubscription *GetFirstActiveSubscription()
+{
+        time_t now = time(NULL);
+        for(size_t i = 0; i < g_Subscriptions.size(); ++i)
+        {
+                if(g_Subscriptions[i].termination > now)
+                        return &g_Subscriptions[i];
+        }
+        return NULL;
 }
 
 int BuildHttpHeaderString(const struct Http_Buffer *pBuf,char *sBuffer,int nLen)
@@ -370,16 +470,16 @@ int BuildGetCapabilitiesString(char *sBuffer,struct Namespace *pNameSpace)
 	strcat(sBuffer,"<tt:RELToken>false</tt:RELToken>");
 	strcat(sBuffer,"</tt:Security>");
 	strcat(sBuffer,"</tt:Device>");
-	strcat(sBuffer,"<tt:Events>");
-	if(g_wOnvifPort == 80)
-		sprintf(TmpBuffer,"<tt:XAddr>http://%s/onvif/Events_service</tt:XAddr>",localIP);
-	else
-		sprintf(TmpBuffer,"<tt:XAddr>http://%s:%d/onvif/Events_service</tt:XAddr>",localIP,g_wOnvifPort);
-	strcat(sBuffer,TmpBuffer);
-	strcat(sBuffer,"<tt:WSSubscriptionPolicySupport>false</tt:WSSubscriptionPolicySupport>");
-	strcat(sBuffer,"<tt:WSPullPointSupport>false</tt:WSPullPointSupport>");
-	strcat(sBuffer,"<tt:WSPausableSubscriptionManagerInterfaceSupport>false</tt:WSPausableSubscriptionManagerInterfaceSupport>");
-	strcat(sBuffer,"</tt:Events>");
+    strcat(sBuffer,"<tt:Events>");
+        if(g_wOnvifPort == 80)
+                sprintf(TmpBuffer,"<tt:XAddr>http://%s/onvif/Events_service</tt:XAddr>",localIP);
+        else
+                sprintf(TmpBuffer,"<tt:XAddr>http://%s:%d/onvif/Events_service</tt:XAddr>",localIP,g_wOnvifPort);
+        strcat(sBuffer,TmpBuffer);
+        strcat(sBuffer,"<tt:WSSubscriptionPolicySupport>true</tt:WSSubscriptionPolicySupport>");
+        strcat(sBuffer,"<tt:WSPullPointSupport>true</tt:WSPullPointSupport>");
+        strcat(sBuffer,"<tt:WSPausableSubscriptionManagerInterfaceSupport>false</tt:WSPausableSubscriptionManagerInterfaceSupport>");
+        strcat(sBuffer,"</tt:Events>");
 	if(g_wOnvifPort == 80)
 		sprintf(TmpBuffer,"<tt:Imaging><tt:XAddr>http://%s/onvif/Imaging_service</tt:XAddr></tt:Imaging>",localIP);
 	else
@@ -1600,38 +1700,144 @@ int BuildGetOptionsConfigureString(char *sBuffer,char *sStreamString,struct Name
 
 
 
-int BuildGetInitialTerminationTimeString(char *sBuffer,char *suuid,struct Namespace *pNameSpace)
+int BuildCreatePullPointSubscriptionString(char *sBuffer,const PullPointSubscription &sub,struct Namespace *pNameSpace)
 {
-	int nLen;
-	char TmpBuffer[1024];
-	char localIP[16];
-	nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-	BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
+        int nLen;
+        char TmpBuffer[1024];
+        char localIP[16];
+        char timebuf[64];
+        FormatUtcTime(time(NULL), timebuf, sizeof(timebuf));
+        nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
    GetLocalAddress(localIP,ETH_WIRE_DEV,(char *)"127.0.0.1");
-	strcat(sBuffer,"<SOAP-ENV:Header>");
-	sprintf(TmpBuffer,"<wsa5:MessageID>%s</wsa5:MessageID>",suuid);
-	strcat(sBuffer,TmpBuffer);
-	strcat(sBuffer,"<wsa5:ReplyTo SOAP-ENV:mustUnderstand=\"true\">");
-	strcat(sBuffer,"<wsa5:Address>http://www.w3.org/2005/08/addressing/anonymous</wsa5:Address>");
-	strcat(sBuffer,"</wsa5:ReplyTo>");
-	if(g_wOnvifPort == 80)
-		sprintf(TmpBuffer,"<wsa5:To SOAP-ENV:mustUnderstand=\"true\">http://%s/onvif/Events_service</wsa5:To>",localIP);
-	else
-		sprintf(TmpBuffer,"<wsa5:To SOAP-ENV:mustUnderstand=\"true\">http://%s:%d/onvif/Events_service</wsa5:To>",localIP,g_wOnvifPort);
-	strcat(sBuffer,TmpBuffer);
-	strcat(sBuffer,"<wsa5:Action SOAP-ENV:mustUnderstand=\"true\">http://www.onvif.org/ver10/events/wsdl/EventPortType/CreatePullPointSubscriptionRequest</wsa5:Action>");
-	strcat(sBuffer,"</SOAP-ENV:Header>");
+        strcat(sBuffer,"<SOAP-ENV:Header>");
+        sprintf(TmpBuffer,"<wsa5:MessageID>urn:uuid:%s</wsa5:MessageID>",sub.id.c_str());
+        strcat(sBuffer,TmpBuffer);
+        strcat(sBuffer,"<wsa5:ReplyTo SOAP-ENV:mustUnderstand=\"true\">");
+        strcat(sBuffer,"<wsa5:Address>http://www.w3.org/2005/08/addressing/anonymous</wsa5:Address>");
+        strcat(sBuffer,"</wsa5:ReplyTo>");
+        if(g_wOnvifPort == 80)
+                sprintf(TmpBuffer,"<wsa5:To SOAP-ENV:mustUnderstand=\"true\">http://%s/onvif/Events_service</wsa5:To>",localIP);
+        else
+                sprintf(TmpBuffer,"<wsa5:To SOAP-ENV:mustUnderstand=\"true\">http://%s:%d/onvif/Events_service</wsa5:To>",localIP,g_wOnvifPort);
+        strcat(sBuffer,TmpBuffer);
+        strcat(sBuffer,"<wsa5:Action SOAP-ENV:mustUnderstand=\"true\">http://www.onvif.org/ver10/events/wsdl/EventPortType/CreatePullPointSubscriptionResponse</wsa5:Action>");
+        strcat(sBuffer,"</SOAP-ENV:Header>");
 
-	strcat(sBuffer,"<SOAP-ENV:Body>");
-	strcat(sBuffer,"<tev:CreatePullPointSubscriptionResponse>");
-	strcat(sBuffer,"<tev:SubscriptionReference><wsa5:Address xsi:nil=\"true\"/></tev:SubscriptionReference>");
-	sprintf(TmpBuffer,"<wsnt:CurrentTime>1970-01-01T00:00:00Z</wsnt:CurrentTime>");
-	strcat(sBuffer,TmpBuffer);
-	sprintf(TmpBuffer,"<wsnt:TerminationTime>1970-01-01T00:00:00Z</wsnt:TerminationTime>");
-	strcat(sBuffer,TmpBuffer);
-	strcat(sBuffer,"</tev:CreatePullPointSubscriptionResponse>");
-	strcat(sBuffer,"</SOAP-ENV:Body>");
-	strcat(sBuffer,"</SOAP-ENV:Envelope>\r\n");
+        strcat(sBuffer,"<SOAP-ENV:Body>");
+        strcat(sBuffer,"<tev:CreatePullPointSubscriptionResponse>");
+        strcat(sBuffer,"<tev:SubscriptionReference>");
+        if(g_wOnvifPort == 80)
+                sprintf(TmpBuffer,"<wsa5:Address>http://%s/onvif/Events_service/PullPoint/%s</wsa5:Address>",localIP,sub.id.c_str());
+        else
+                sprintf(TmpBuffer,"<wsa5:Address>http://%s:%d/onvif/Events_service/PullPoint/%s</wsa5:Address>",localIP,g_wOnvifPort,sub.id.c_str());
+        strcat(sBuffer,TmpBuffer);
+        strcat(sBuffer,"</tev:SubscriptionReference>");
+        sprintf(TmpBuffer,"<wsnt:CurrentTime>%s</wsnt:CurrentTime>",timebuf);
+        strcat(sBuffer,TmpBuffer);
+        char terminationbuf[64];
+        FormatUtcTime(sub.termination, terminationbuf, sizeof(terminationbuf));
+        sprintf(TmpBuffer,"<wsnt:TerminationTime>%s</wsnt:TerminationTime>",terminationbuf);
+        strcat(sBuffer,TmpBuffer);
+        strcat(sBuffer,"</tev:CreatePullPointSubscriptionResponse>");
+        strcat(sBuffer,"</SOAP-ENV:Body>");
+        strcat(sBuffer,"</SOAP-ENV:Envelope>\r\n");
+        return strlen(sBuffer);
+}
+
+int BuildPullMessagesResponse(char *sBuffer,const PullPointSubscription &sub,struct Namespace *pNameSpace,const std::vector<AlarmEvent> &events)
+{
+        int nLen;
+        char TmpBuffer[1024];
+        char currentTime[64];
+        FormatUtcTime(time(NULL), currentTime, sizeof(currentTime));
+        nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
+        strcat(sBuffer,"<SOAP-ENV:Body>");
+        strcat(sBuffer,"<tev:PullMessagesResponse>");
+        sprintf(TmpBuffer,"<tev:CurrentTime>%s</tev:CurrentTime>",currentTime);
+        strcat(sBuffer,TmpBuffer);
+        char terminationbuf[64];
+        FormatUtcTime(sub.termination, terminationbuf, sizeof(terminationbuf));
+        sprintf(TmpBuffer,"<tev:TerminationTime>%s</tev:TerminationTime>",terminationbuf);
+        strcat(sBuffer,TmpBuffer);
+        for(size_t i = 0; i < events.size(); ++i)
+        {
+                const AlarmEvent &evt = events[i];
+                strcat(sBuffer,"<wsnt:NotificationMessage>");
+                sprintf(TmpBuffer,"<wsnt:Topic Dialect=\"%s\">%s</wsnt:Topic>",kEventTopicDialect,evt.topic.c_str());
+                strcat(sBuffer,TmpBuffer);
+                strcat(sBuffer,"<wsnt:Message>");
+                sprintf(TmpBuffer,"<tt:Message UtcTime=\"%s\" PropertyOperation=\"Changed\">",evt.utcTime.c_str());
+                strcat(sBuffer,TmpBuffer);
+                strcat(sBuffer,"<tt:Source>");
+                sprintf(TmpBuffer,"<tt:SimpleItem Name=\"%s\" Value=\"%s\"/>",evt.sourceName.c_str(),evt.sourceValue.c_str());
+                strcat(sBuffer,TmpBuffer);
+                strcat(sBuffer,"</tt:Source>");
+                strcat(sBuffer,"<tt:Data>");
+                sprintf(TmpBuffer,"<tt:SimpleItem Name=\"%s\" Value=\"%s\"/>",evt.dataName.c_str(),evt.dataValue.c_str());
+                strcat(sBuffer,TmpBuffer);
+                strcat(sBuffer,"</tt:Data>");
+                strcat(sBuffer,"</tt:Message>");
+                strcat(sBuffer,"</wsnt:Message>");
+                strcat(sBuffer,"</wsnt:NotificationMessage>");
+        }
+        strcat(sBuffer,"</tev:PullMessagesResponse>");
+        strcat(sBuffer,"</SOAP-ENV:Body>");
+        strcat(sBuffer,"</SOAP-ENV:Envelope>\r\n");
+        return strlen(sBuffer);
+}
+
+int BuildRenewResponse(char *sBuffer,const PullPointSubscription &sub,struct Namespace *pNameSpace)
+{
+        int nLen;
+        char TmpBuffer[1024];
+        char currentTime[64];
+        FormatUtcTime(time(NULL), currentTime, sizeof(currentTime));
+        char terminationbuf[64];
+        FormatUtcTime(sub.termination, terminationbuf, sizeof(terminationbuf));
+        nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
+        strcat(sBuffer,"<SOAP-ENV:Body>");
+        strcat(sBuffer,"<wsnt:RenewResponse>");
+        sprintf(TmpBuffer,"<wsnt:TerminationTime>%s</wsnt:TerminationTime>",terminationbuf);
+        strcat(sBuffer,TmpBuffer);
+        sprintf(TmpBuffer,"<wsnt:CurrentTime>%s</wsnt:CurrentTime>",currentTime);
+        strcat(sBuffer,TmpBuffer);
+        strcat(sBuffer,"</wsnt:RenewResponse>");
+        strcat(sBuffer,"</SOAP-ENV:Body>");
+        strcat(sBuffer,"</SOAP-ENV:Envelope>\r\n");
+        return strlen(sBuffer);
+}
+
+int BuildUnsubscribeResponse(char *sBuffer,struct Namespace *pNameSpace)
+{
+        int nLen;
+        nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
+        strcat(sBuffer,"<SOAP-ENV:Body>");
+        strcat(sBuffer,"<wsnt:UnsubscribeResponse/>");
+        strcat(sBuffer,"</SOAP-ENV:Body>");
+        strcat(sBuffer,"</SOAP-ENV:Envelope>\r\n");
+        return strlen(sBuffer);
+}
+
+int BuildGetEventPropertiesResponse(char *sBuffer,struct Namespace *pNameSpace)
+{
+        int nLen;
+        nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
+        strcat(sBuffer,"<SOAP-ENV:Body>");
+        strcat(sBuffer,"<tev:GetEventPropertiesResponse>");
+        strcat(sBuffer,"<tev:TopicNamespaceLocation>http://www.onvif.org/onvif/ver10/topics/topicns.xml</tev:TopicNamespaceLocation>");
+        strcat(sBuffer,"<wsnt:TopicSet>");
+        strcat(sBuffer,"<tns1:VideoSource><tns1:MotionAlarm/></tns1:VideoSource>");
+        strcat(sBuffer,"<tns1:Device><tns1:IO><tns1:Input/><tns1:Relay/></tns1:IO></tns1:Device>");
+        strcat(sBuffer,"</wsnt:TopicSet>");
+        strcat(sBuffer,"</tev:GetEventPropertiesResponse>");
+        strcat(sBuffer,"</SOAP-ENV:Body>");
+        strcat(sBuffer,"</SOAP-ENV:Envelope>\r\n");
+        return strlen(sBuffer);
 }
 
 int BuildGetFailString(char *sBuffer,struct Namespace *pNameSpace)
@@ -1848,19 +2054,106 @@ pBuf->action   GetHostnaem
 			strcat(TmpBuf2,TmpBuf);
 			send(sock,TmpBuf2,nLen + nLen2,0);
 		}
-		else if(XmlContainString(pBuf->action,"GetCapabilities"))
-		{
-			printf("pBuf->action   %s\n","GetCapabilities");
-			nLen = BuildGetCapabilitiesString(TmpBuf,devinfo_namespaces);//GetCapabilities_namespaces);
-			nLen2 = BuildHttpHeaderString(pBuf,TmpBuf2,nLen);
-			strcat(TmpBuf2,TmpBuf);
-			send(sock,TmpBuf2,nLen + nLen2,0);
-		}
-		else if(XmlContainString(pBuf->action,"GetServices"))
-		{
-			printf("pBuf->action   %s\n","GetServices");
-			nLen = BuildGetServicesString(TmpBuf,devinfo_namespaces);//GetServices_namespaces);
-			nLen2 = BuildHttpHeaderString(pBuf,TmpBuf2,nLen);
+                else if(XmlContainString(pBuf->action,"GetCapabilities"))
+                {
+                        printf("pBuf->action   %s\n","GetCapabilities");
+                        nLen = BuildGetCapabilitiesString(TmpBuf,devinfo_namespaces);//GetCapabilities_namespaces);
+                        nLen2 = BuildHttpHeaderString(pBuf,TmpBuf2,nLen);
+                        strcat(TmpBuf2,TmpBuf);
+                        send(sock,TmpBuf2,nLen + nLen2,0);
+                }
+                else if(XmlContainString(pBuf->action,"CreatePullPointSubscription"))
+                {
+                        printf("pBuf->action   %s\n","CreatePullPointSubscription");
+                        PullPointSubscription sub;
+                        GenerateUUIDString(sub.id);
+                        sub.termination = time(NULL) + kDefaultTerminationSeconds;
+                        EnqueueBaselineEvents(sub);
+                        pthread_mutex_lock(&g_EventMutex);
+                        g_Subscriptions.push_back(sub);
+                        pthread_mutex_unlock(&g_EventMutex);
+                        nLen = BuildCreatePullPointSubscriptionString(TmpBuf,sub,devinfo_namespaces);
+                        nLen2 = BuildHttpHeaderString(pBuf,TmpBuf2,nLen);
+                        strcat(TmpBuf2,TmpBuf);
+                        send(sock,TmpBuf2,nLen + nLen2,0);
+                }
+                else if(XmlContainString(pBuf->action,"PullMessages"))
+                {
+                        printf("pBuf->action   %s\n","PullMessages");
+                        pthread_mutex_lock(&g_EventMutex);
+                        PullPointSubscription *sub = GetFirstActiveSubscription();
+                        std::vector<AlarmEvent> events;
+                        if(sub)
+                        {
+                                events = sub->events;
+                                sub->events.clear();
+                        }
+                        pthread_mutex_unlock(&g_EventMutex);
+                        PullPointSubscription emptySub;
+                        if(!sub)
+                        {
+                                emptySub.termination = time(NULL) + kDefaultTerminationSeconds;
+                                sub = &emptySub;
+                        }
+                        nLen = BuildPullMessagesResponse(TmpBuf,*sub,devinfo_namespaces,events);
+                        nLen2 = BuildHttpHeaderString(pBuf,TmpBuf2,nLen);
+                        strcat(TmpBuf2,TmpBuf);
+                        send(sock,TmpBuf2,nLen + nLen2,0);
+                }
+                else if(XmlContainString(pBuf->action,"Renew"))
+                {
+                        printf("pBuf->action   %s\n","Renew");
+                        pthread_mutex_lock(&g_EventMutex);
+                        PullPointSubscription *sub = GetFirstActiveSubscription();
+                        if(sub)
+                                sub->termination = time(NULL) + kDefaultTerminationSeconds;
+                        pthread_mutex_unlock(&g_EventMutex);
+                        PullPointSubscription temp;
+                        if(!sub)
+                        {
+                                temp.termination = time(NULL) + kDefaultTerminationSeconds;
+                                sub = &temp;
+                        }
+                        nLen = BuildRenewResponse(TmpBuf,*sub,devinfo_namespaces);
+                        nLen2 = BuildHttpHeaderString(pBuf,TmpBuf2,nLen);
+                        strcat(TmpBuf2,TmpBuf);
+                        send(sock,TmpBuf2,nLen + nLen2,0);
+                }
+                else if(XmlContainString(pBuf->action,"Unsubscribe"))
+                {
+                        printf("pBuf->action   %s\n","Unsubscribe");
+                        pthread_mutex_lock(&g_EventMutex);
+                        PullPointSubscription *sub = GetFirstActiveSubscription();
+                        if(sub)
+                        {
+                                for(std::vector<PullPointSubscription>::iterator it = g_Subscriptions.begin(); it != g_Subscriptions.end(); ++it)
+                                {
+                                        if(it->id == sub->id)
+                                        {
+                                                g_Subscriptions.erase(it);
+                                                break;
+                                        }
+                                }
+                        }
+                        pthread_mutex_unlock(&g_EventMutex);
+                        nLen = BuildUnsubscribeResponse(TmpBuf,devinfo_namespaces);
+                        nLen2 = BuildHttpHeaderString(pBuf,TmpBuf2,nLen);
+                        strcat(TmpBuf2,TmpBuf);
+                        send(sock,TmpBuf2,nLen + nLen2,0);
+                }
+                else if(XmlContainString(pBuf->action,"GetEventProperties"))
+                {
+                        printf("pBuf->action   %s\n","GetEventProperties");
+                        nLen = BuildGetEventPropertiesResponse(TmpBuf,devinfo_namespaces);
+                        nLen2 = BuildHttpHeaderString(pBuf,TmpBuf2,nLen);
+                        strcat(TmpBuf2,TmpBuf);
+                        send(sock,TmpBuf2,nLen + nLen2,0);
+                }
+                else if(XmlContainString(pBuf->action,"GetServices"))
+                {
+                        printf("pBuf->action   %s\n","GetServices");
+                        nLen = BuildGetServicesString(TmpBuf,devinfo_namespaces);//GetServices_namespaces);
+                        nLen2 = BuildHttpHeaderString(pBuf,TmpBuf2,nLen);
 			strcat(TmpBuf2,TmpBuf);
 			send(sock,TmpBuf2,nLen + nLen2,0);
 		}
@@ -2071,24 +2364,27 @@ pBuf->action   GetHostnaem
 			send(sock,TmpBuf2,nLen + nLen2,0);
 		}
 	}
-	else
-	{
-		char Value[1024];
-		if(0 == XmlGetStringValue(pBuf->Buffer+pBuf->headerlen,"InitialTerminationTime",Value,1024))
-		{
-			char suuid[1024];
-			if(0 == XmlGetStringValue(pBuf->Buffer+pBuf->headerlen,"a:MessageID",suuid,1024))
-			{
-				nLen = BuildGetInitialTerminationTimeString(TmpBuf,suuid,devinfo_namespaces);//GetTerminationTime_namespaces);
-				nLen2 = BuildHttpHeaderString(pBuf,TmpBuf2,nLen);
-				strcat(TmpBuf2,TmpBuf);
-				send(sock,TmpBuf2,nLen + nLen2,0);
-			}
-		}
-		else
-		{
-			nLen = BuildGetFailString(TmpBuf,devinfo_namespaces);
-			nLen2 = BuildHttpFailHeaderString(pBuf,TmpBuf2,nLen);
+        else
+        {
+                char Value[1024];
+                if(0 == XmlGetStringValue(pBuf->Buffer+pBuf->headerlen,"InitialTerminationTime",Value,1024))
+                {
+                        PullPointSubscription sub;
+                        GenerateUUIDString(sub.id);
+                        sub.termination = time(NULL) + kDefaultTerminationSeconds;
+                        EnqueueBaselineEvents(sub);
+                        pthread_mutex_lock(&g_EventMutex);
+                        g_Subscriptions.push_back(sub);
+                        pthread_mutex_unlock(&g_EventMutex);
+                        nLen = BuildCreatePullPointSubscriptionString(TmpBuf,sub,devinfo_namespaces);
+                        nLen2 = BuildHttpHeaderString(pBuf,TmpBuf2,nLen);
+                        strcat(TmpBuf2,TmpBuf);
+                        send(sock,TmpBuf2,nLen + nLen2,0);
+                }
+                else
+                {
+                        nLen = BuildGetFailString(TmpBuf,devinfo_namespaces);
+                        nLen2 = BuildHttpFailHeaderString(pBuf,TmpBuf2,nLen);
 			strcat(TmpBuf2,TmpBuf);
 			send(sock,TmpBuf2,nLen + nLen2,0);
 		}

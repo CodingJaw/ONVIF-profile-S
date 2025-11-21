@@ -5,7 +5,8 @@
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#else 
+#include <strings.h>
+#else
 #include <WINSOCK2.H>
 #endif
 #include <string.h>
@@ -65,9 +66,57 @@ extern unsigned int g_OnvifServiceRunning;
 
 int ComparseCommand(const char *sBuf,const char *sCommand)
 {
-	if(0 == strncmp(sBuf,sCommand,strlen(sCommand)))
-			return 1;
-	return 0;
+        if(0 == strncmp(sBuf,sCommand,strlen(sCommand)))
+                        return 1;
+        return 0;
+}
+
+static void ExtractHeaderValue(const char *buffer,const char *key,char *out,int outLen)
+{
+        const char *pos = strcasestr(buffer,key);
+        if(!pos)
+        {
+                out[0] = '\0';
+                return;
+        }
+        pos = strchr(pos,':');
+        if(!pos)
+        {
+                out[0] = '\0';
+                return;
+        }
+        pos++;
+        while(*pos == ' ')
+                pos++;
+        int i = 0;
+        while(*pos && *pos != '\r' && *pos != '\n' && i < outLen -1)
+        {
+                out[i++] = *pos;
+                pos++;
+        }
+        out[i] = '\0';
+}
+
+static void BuildRtspOptionsResponse(const char *cseq,char *out,int outLen)
+{
+        snprintf(out,outLen,"RTSP/1.0 200 OK\r\nCSeq: %s\r\nPublic: OPTIONS, DESCRIBE, SETUP, PLAY\r\n\r\n",cseq);
+}
+
+static void BuildRtspDescribeResponse(const char *cseq,const char *uri,char *out,int outLen)
+{
+        char localIP[16];
+        if(get_ip_addr((char *)"wlan0",localIP) < 0)
+                strcpy(localIP,"127.0.0.1");
+        char sdp[512];
+        snprintf(sdp,sizeof(sdp),"v=0\r\no=- 0 0 IN IP4 %s\r\ns=ONVIF Test Stream\r\nt=0 0\r\na=control:*\r\nm=video 0 RTP/AVP 96\r\nc=IN IP4 0.0.0.0\r\na=rtpmap:96 H264/90000\r\na=control:trackID=1\r\n",localIP);
+        snprintf(out,outLen,
+                        "RTSP/1.0 200 OK\r\nCSeq: %s\r\nContent-Base: %s\r\nContent-Type: application/sdp\r\nContent-Length: %lu\r\n\r\n%s",
+                        cseq,uri,(unsigned long)strlen(sdp),sdp);
+}
+
+static void BuildRtspSimpleResponse(const char *cseq,const char *session,char *out,int outLen)
+{
+        snprintf(out,outLen,"RTSP/1.0 200 OK\r\nCSeq: %s\r\nSession: %s\r\n\r\n",cseq,session);
 }
 
 
@@ -117,19 +166,41 @@ void * RTSP_NewConnThread(void *pPara)
 			printf("HttpParse OK\n");
 			//printf("%s(%d) rtsp tcp recved total %d bytes:%s\n",inet_ntoa(pConnThread->remote_addr.sin_addr),ntohs(pConnThread->remote_addr.sin_port),RecvBuf.nBufLen,RecvBuf.Buffer);
 			
-			if(ComparseCommand(RecvBuf.Buffer,"OPTIONS"))
-			{
-				
-			}
-			else if(ComparseCommand(RecvBuf.Buffer,"DESCRIBE"))
-			{
-			}
-			else if(ComparseCommand(RecvBuf.Buffer,"SETUP"))
-			{
-			}
-			else if(ComparseCommand(RecvBuf.Buffer,"PLAY"))
-			{
-			}
+                        if(ComparseCommand(RecvBuf.Buffer,"OPTIONS"))
+                        {
+                                char cseq[64];
+                                ExtractHeaderValue(RecvBuf.Buffer,"CSeq",cseq,sizeof(cseq));
+                                char response[512];
+                                BuildRtspOptionsResponse(cseq,response,sizeof(response));
+                                send(sock,response,strlen(response),0);
+                        }
+                        else if(ComparseCommand(RecvBuf.Buffer,"DESCRIBE"))
+                        {
+                                char cseq[64];
+                                char uri[256];
+                                memset(uri,0,sizeof(uri));
+                                sscanf(RecvBuf.msgbuf,"DESCRIBE %255s",uri);
+                                ExtractHeaderValue(RecvBuf.Buffer,"CSeq",cseq,sizeof(cseq));
+                                char response[1024];
+                                BuildRtspDescribeResponse(cseq,uri,response,sizeof(response));
+                                send(sock,response,strlen(response),0);
+                        }
+                        else if(ComparseCommand(RecvBuf.Buffer,"SETUP"))
+                        {
+                                char cseq[64];
+                                ExtractHeaderValue(RecvBuf.Buffer,"CSeq",cseq,sizeof(cseq));
+                                char response[512];
+                                BuildRtspSimpleResponse(cseq,"12345678",response,sizeof(response));
+                                send(sock,response,strlen(response),0);
+                        }
+                        else if(ComparseCommand(RecvBuf.Buffer,"PLAY"))
+                        {
+                                char cseq[64];
+                                ExtractHeaderValue(RecvBuf.Buffer,"CSeq",cseq,sizeof(cseq));
+                                char response[512];
+                                BuildRtspSimpleResponse(cseq,"12345678",response,sizeof(response));
+                                send(sock,response,strlen(response),0);
+                        }
 			else
 			{
 				printf("unknow command...\n");
@@ -255,15 +326,15 @@ void * RTSP_ServiceThread(void *param)
 	return NULL;
 }
 
-int RTSP_ServiceStart()
-{
-	int ret;
-	pthread_t hRtspThread;
-	ret = pthread_create(&hRtspThread,NULL,&RTSP_ServiceThread,NULL);
-	if(ret < 0)
-	{
-		printf("create rtsp service thread error\n");
-		return -1;
+  g_sys_param.videoEnc[0][0].nFramerate = g_sys_param.videoEnc[0][1].nFramerate = 30;
+  g_sys_param.videoEnc[0][0].nKeyInterval = g_sys_param.videoEnc[0][1].nKeyInterval = 100;
+  g_sys_param.rtsp.nRtspPort = 1554;*/
+  ONVIFStart();
+  RTSP_ServiceStart();
+  while(1)
+  {
+    sleep(1);
+  }
 	}
 	return 0;
 }
