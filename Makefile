@@ -11,7 +11,7 @@ OBJS 		:= $(wildcard $(OBJSPATH)/*.o)
 .PHONY: all
 
 all:
-	$(if $(shell find $(OBJSPATH)), $(shell cd ./), $(shell mkdir $(OBJSPATH)))
+	@mkdir -p $(OBJSPATH)
 	$(CC) -c -g soapServer.cpp -o $(OBJSPATH)/soapServer.o $(CFLAGS)
 	$(CC) -c -g onvifDiscovery.cpp -o $(OBJSPATH)/onvifDiscovery.o $(CFLAGS)
 	$(CC) -c -g onvifService.cpp -o $(OBJSPATH)/onvifService.o $(CFLAGS)
