@@ -75,7 +75,7 @@ struct PullPointSubscription
 static std::vector<PullPointSubscription> g_Subscriptions;
 //FIXME remove SYS_PARAM
 //extern SYS_PARAM g_sys_param;
-int GetLocalAddress(char *szIPAddr, char* ETH_NAME /* = ETH_WIRE_DEV */, char * def)
+int GetLocalAddress(char *szIPAddr, const char* ETH_NAME /* = ETH_WIRE_DEV */, char * def)
 {
 	int   sock;
 	struct   sockaddr_in   sin;
@@ -106,7 +106,7 @@ int GetLocalAddress(char *szIPAddr, char* ETH_NAME /* = ETH_WIRE_DEV */, char * 
 
 
 
-void ONVIF_GETMAC(unsigned char * macaddr, char * eth_device)
+void ONVIF_GETMAC(unsigned char * macaddr, const char * eth_device)
 {
 	int sock;
 		//	int i;

@@ -8,7 +8,7 @@
 #ifndef COMMON_H_
 #define COMMON_H_
 
-#define ETH_WIRE_DEV "wlan0"
+static const char ETH_WIRE_DEV[] = "wlan0";
 #define SYSTEM_FWVER "1.1.01.07"
 #define SYSTEM_HWVER "5"
 #define SYSTEM_DEVICEID "123456789"
