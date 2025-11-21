@@ -47,7 +47,7 @@ extern unsigned short g_wOnvifPort;
 unsigned int g_OnvifServiceRunning = 1;
 //FIXME remove SYS_PARAM
 //extern SYS_PARAM g_sys_param;
-int GetLocalAddress(char *szIPAddr, char* ETH_NAME /* = "eth0" */, char * def)
+int GetLocalAddress(char *szIPAddr, char* ETH_NAME /* = ETH_WIRE_DEV */, char * def)
 {
 	int   sock;
 	struct   sockaddr_in   sin;
@@ -142,7 +142,7 @@ int BuildDeviceInfoString(char *sBuffer,struct Namespace *pNameSpace)
 	char TmpBuffer[1024];
 	char configbuff[1024];
 	unsigned char mac[6];
-	ONVIF_GETMAC(mac,"wlan0");
+    ONVIF_GETMAC(mac,ETH_WIRE_DEV);
 	nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 	BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
 
@@ -180,10 +180,10 @@ int BuildNetworkInterfaceString(char *sBuffer,struct Namespace *pNameSpace)
 	char localIP[16];
 	char configbuff[1024];
 	unsigned char mac[6];
-	ONVIF_GETMAC(mac,"wlan0");
+    ONVIF_GETMAC(mac,ETH_WIRE_DEV);
 	nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 	BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
-	GetLocalAddress(localIP,"wlan0",(char *)"127.0.0.1");
+        GetLocalAddress(localIP,ETH_WIRE_DEV,(char *)"127.0.0.1");
 	//start soap-env body
 	strcat(sBuffer,"<SOAP-ENV:Body>");
 	strcat(sBuffer,"<tds:GetNetworkInterfacesResponse>");
@@ -328,7 +328,7 @@ int BuildGetCapabilitiesString(char *sBuffer,struct Namespace *pNameSpace)
 	char localIP[16];
 	nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 	BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
-	GetLocalAddress(localIP,"wlan0",(char *)"127.0.0.1");
+        GetLocalAddress(localIP,ETH_WIRE_DEV,(char *)"127.0.0.1");
 	//start soap-env body
 	strcat(sBuffer,"<SOAP-ENV:Body>");
 
@@ -1114,7 +1114,7 @@ Connection: close
 	int nLen;
 	char TmpBuffer[1024];
 	char localIP[16];
-	GetLocalAddress(localIP,"wlan0",(char *)"127.0.0.1");
+   GetLocalAddress(localIP,ETH_WIRE_DEV,(char *)"127.0.0.1");
 	nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 	BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
 
@@ -1295,7 +1295,7 @@ int BuildGetStreamUriString(char *sBuffer,char *sStreamString,struct Namespace *
 	char localIP[16];
 	nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 	BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
-	GetLocalAddress(localIP,"wlan0",(char *)"127.0.0.1");
+   GetLocalAddress(localIP,ETH_WIRE_DEV,(char *)"127.0.0.1");
 	//start soap-env body
 	strcat(sBuffer,"<SOAP-ENV:Body>");
 	strcat(sBuffer,"<trt:GetStreamUriResponse>");
@@ -1336,7 +1336,7 @@ int BuildGetVideoSourceConfigureString(char *sBuffer,char *sStreamString,struct 
 	char localIP[16];
 	nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 	BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
-	GetLocalAddress(localIP,"wlan0",(char *)"127.0.0.1");
+   GetLocalAddress(localIP,ETH_WIRE_DEV,(char *)"127.0.0.1");
 	//start soap-env body
 	strcat(sBuffer,"<SOAP-ENV:Body>");
 	strcat(sBuffer,"<trt:GetVideoSourceConfigurationResponse>");
@@ -1387,7 +1387,7 @@ int GetVideoSourceConfigurationsString(char *sBuffer,char *sStreamString,struct 
 	char localIP[16];
 	nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 	BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
-	GetLocalAddress(localIP,"wlan0",(char *)"127.0.0.1");
+   GetLocalAddress(localIP,ETH_WIRE_DEV,(char *)"127.0.0.1");
 	//start soap-env body
 	strcat(sBuffer,"<SOAP-ENV:Body>");
 	strcat(sBuffer,"<trt:GetVideoSourceConfigurationsResponse>");
@@ -1607,7 +1607,7 @@ int BuildGetInitialTerminationTimeString(char *sBuffer,char *suuid,struct Namesp
 	char localIP[16];
 	nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 	BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
-	GetLocalAddress(localIP,"wlan0",(char *)"127.0.0.1");
+   GetLocalAddress(localIP,ETH_WIRE_DEV,(char *)"127.0.0.1");
 	strcat(sBuffer,"<SOAP-ENV:Header>");
 	sprintf(TmpBuffer,"<wsa5:MessageID>%s</wsa5:MessageID>",suuid);
 	strcat(sBuffer,TmpBuffer);
@@ -1658,7 +1658,7 @@ int GetNTPString(char *sBuffer,struct Namespace *pNameSpace)
 	char localIP[16];
 	nLen = sprintf(sBuffer,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 	BuildDevInfoHeaderString(sBuffer+nLen,pNameSpace);
-	GetLocalAddress(localIP,"wlan0",(char *)"127.0.0.1");
+   GetLocalAddress(localIP,ETH_WIRE_DEV,(char *)"127.0.0.1");
 	//start soap-env body
 	strcat(sBuffer,"<SOAP-ENV:Body>");
 	strcat(sBuffer,"<tds:GetNTPResponse><tds:NTPInformation><tt:FromDHCP>false</tt:FromDHCP><tt:NTPManual><tt:Type>IPv4</tt:Type><tt:IPv4Address>10.1.1.1</tt:IPv4Address></tt:NTPManual></tds:NTPInformation></tds:GetNTPResponse></SOAP-ENV:Body></SOAP-ENV:Envelope>");
