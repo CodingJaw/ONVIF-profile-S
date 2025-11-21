@@ -9,6 +9,7 @@
 #else
 #include <WINSOCK2.H>
 #endif
+#include <pthread.h>
 #include <string.h>
 #include "libonvif.h"
 //#include "../param.h"
@@ -25,6 +26,12 @@ struct RTSP_ConnThread
 	int		  sock;
 	struct sockaddr_in remote_addr;
 };
+
+// Forward declarations to make the RTSP entry points visible before main()
+void * RTSP_NewConnThread(void *param);
+int RTSPNewConnect(int hsock,struct sockaddr_in *pAddr);
+void * RTSP_ServiceThread(void *param);
+int RTSP_ServiceStart();
 
 
 #ifndef _WIN32
@@ -201,7 +208,7 @@ void * RTSP_NewConnThread(void *pPara)
                                 BuildRtspSimpleResponse(cseq,"12345678",response,sizeof(response));
                                 send(sock,response,strlen(response),0);
                         }
-			else
+			else
 			{
 				printf("unknow command...\n");
 			}
@@ -313,31 +320,32 @@ void * RTSP_ServiceThread(void *param)
 		printf("client connected:%s(%d)\n",inet_ntoa(addr.sin_addr),ntohs(addr.sin_port));
 		opt = 1;
 		ret = setsockopt(hConnSock,IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
-int main()
-{
-  return 0;
+		if (ret < 0)
+		{
+			printf("set rtsp tcp sockopt error\n");
+			close(hConnSock);
+			continue;
+		}
+		RTSPNewConnect(hConnSock,&addr);
+	}
+	close(hListenSock);
+	pthread_exit(NULL);
+	return NULL;
 }
-  RTSP_ServiceStart();
-  while(1)
-  {
-    sleep(1);
-  }
+
+int RTSP_ServiceStart()
+{
+	int ret;
+	pthread_t hRtspThread;
+	ret = pthread_create(&hRtspThread,NULL,&RTSP_ServiceThread,NULL);
+	if(ret < 0)
+	{
+		printf("create rtsp service thread error\n");
+		return -1;
 	}
 	return 0;
 }
 
-int main()
-{
-  /*memset(&g_sys_param,0,sizeof(g_sys_param));
-  strcpy(g_sys_param.sysInfo.strDeviceID,"20030722000001");
-  g_sys_param.sysInfo.nHardwareVersion = HARDWARE_VERSION;
-  g_sys_param.sysInfo.nSoftwareVersion = SOFTWARE_VERSION;
-  g_sys_param.videoEnc[0][0].nEncodeWidth = 1600;
-  g_sys_param.videoEnc[0][0].nEncodeHeight = 1200;
-  g_sys_param.videoEnc[0][1].nEncodeWidth = 800;
-  g_sys_param.videoEnc[0][1].nEncodeHeight = 600;
-  strcpy(g_sys_param.userInfo.Admin.strName,"admin");
-  strcpy(g_sys_param.userInfo.Admin.strPsw,"admin");
   g_sys_param.videoEnc[0][0].nFramerate = g_sys_param.videoEnc[0][1].nFramerate = 30;
   g_sys_param.videoEnc[0][0].nKeyInterval = g_sys_param.videoEnc[0][1].nKeyInterval = 100;
   g_sys_param.rtsp.nRtspPort = 1554;*/
